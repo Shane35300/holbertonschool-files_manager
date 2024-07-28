@@ -137,37 +137,24 @@ class FilesController {
 		if (!token) {
 			return res.status(401).json({ error: 'Unauthorized' });
 		}
-
 		const userId = await redisClient.get(`auth_${token}`);
 		if (!userId) {
 			return res.status(401).json({ error: 'Unauthorized' });
 		}
-
-		const { parentId = "0", page = 0 } = req.query;
+		const { parentId = 0, page = 0 } = req.query;
 		const userIdToFind = new ObjectId(userId);
 		const skip = parseInt(page, 10) * 20;
-
-		console.log('Requested parentId:', parentId); // Log parentId
-		let match;
-		if (parentId === "0") {
-			match = { userId: userIdToFind, parentId: 0 };
-		} else {
-			console.log('Converted parentId:', new ObjectId(parentId)); // Log converted parentId
-			match = { userId: userIdToFind, parentId: new ObjectId(parentId) };
-		}
-
-		console.log('Match query:', match); // Log the match query
-
+		const match = {
+			userId: userIdToFind,
+			parentId: parentId !== "0" ? parentId : "0",
+		};
 		const filesCollection = dbClient.db.collection('files');
 		const cursor = filesCollection.aggregate([
 			{ $match: match },
 			{ $skip: skip },
 			{ $limit: 20 },
 		]);
-
 		const allFiles = await cursor.toArray();
-		console.log('Files found:', allFiles); // Log files found
-
 		const jsonResponse = allFiles.map(file => ({
 			id: file._id,
 			userId: file.userId,
@@ -176,7 +163,6 @@ class FilesController {
 			isPublic: file.isPublic,
 			parentId: file.parentId,
 		}));
-
 		return res.status(200).json(jsonResponse);
 	}
 };
