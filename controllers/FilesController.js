@@ -5,7 +5,10 @@ import { ObjectId } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import Queue from 'bull';
+import Bull from 'bull';
 import mime from 'mime-types';
+
+const fileQueue = new Bull('fileQueue');
 
 class FilesController {
 	static async postUpload(req, res) {
@@ -98,9 +101,8 @@ class FilesController {
 		await filesCollection.insertOne(newFile);
 		newFile.id = newFile._id;
 		// Add image to the Bull queue
-		const queue = new Queue('fileQueue');
 		if (newFile.type === 'image') {
-			await queue.add({ userId: newFile.userId, fileId: newFile.id });
+			fileQueue.add({ userId: newFile.userId.toString(), fileId: newFile.id.toString() });
 		}
 		return res.status(201).json({
 			id: newFile.id,
@@ -237,37 +239,48 @@ class FilesController {
 	static async getFile(req, res) {
 		const token = req.headers['x-token'] || null;
 		const fileId = req.params.id;
+		const size = req.query.size;
+		try {
+			const filesCollection = dbClient.db.collection('files');
+			const file = await filesCollection.findOne({ _id: new ObjectId(fileId) });
 
-		const filesCollection = dbClient.db.collection('files');
-		const file = await filesCollection.findOne({ _id: new ObjectId(fileId) });
-
-		if (!file) {
-			return res.status(404).json({ error: 'Not found' });
-		}
-
-		if (!file.isPublic) {
-			if (!token) {
+			if (!file) {
 				return res.status(404).json({ error: 'Not found' });
 			}
-			const userId = await redisClient.get(`auth_${token}`);
-			if (!userId || file.userId.toString() !== userId.toString()) {
+
+			if (!file.isPublic) {
+				if (!token) {
+					return res.status(404).json({ error: 'Not found' });
+				}
+				const userId = await redisClient.get(`auth_${token}`);
+				if (!userId || file.userId.toString() !== userId.toString()) {
+					return res.status(404).json({ error: 'Not found' });
+				}
+			}
+
+			if (file.type === 'folder') {
+				return res.status(400).json({ error: "A folder doesn't have content" });
+			}
+
+			let filePath = file.localPath;
+			if (size && ['100', '250', '500'].includes(size)) {
+				filePath = `${filePath}_${size}`;
+			}
+
+			if (!fs.existsSync(filePath)) {
 				return res.status(404).json({ error: 'Not found' });
 			}
+
+			const mimeType = mime.lookup(file.name) || 'application/octet-stream';
+			res.setHeader('Content-Type', mimeType);
+
+			const fileContent = fs.readFileSync(filePath);
+			return res.status(200).send(fileContent);
+
+		} catch (error) {
+			console.error('Error while fetching the file:', error);
+			return res.status(500).json({ error: 'Internal Server Error' });
 		}
-
-		if (file.type === 'folder') {
-			return res.status(400).json({ error: "A folder doesn't have content" });
-		}
-
-		if (!fs.existsSync(file.localPath)) {
-			return res.status(404).json({ error: 'Not found' });
-		}
-
-		const mimeType = mime.lookup(file.name);
-		res.setHeader('Content-Type', mimeType);
-
-		const fileContent = fs.readFileSync(file.localPath);
-		return res.status(200).send(fileContent);
 	}
 };
 export default FilesController;
